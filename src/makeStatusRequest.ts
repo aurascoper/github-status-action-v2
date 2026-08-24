@@ -2,10 +2,10 @@ import * as actionsCore from '@actions/core'
 import inputNames from './inputNames';
 import { RequestParameters } from '@octokit/types';
 
-export type CommitState = "success" | "error" | "failure" | "pending";
+export type CommitState = "success" | "error" | "failure" | "pending" | "cancelled";
 export type StatusRequest = RequestParameters & Pick<any, "owner" | "repo" | "state" | "sha" | "description" | "context" | "target_url">;
 export const ERR_INVALID_OWNER = "Input 'owner' must be a valid GitHub username";
-export const ERR_INVALID_STATE = "Input 'state' must be one of success | error | failure | pending";
+export const ERR_INVALID_STATE = "Input 'state' must be one of success | error | failure | pending | cancelled";
 
 const regExUsername = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
 
@@ -31,6 +31,13 @@ export default function makeStatusRequest(testCore: any | null = null): StatusRe
         throw new Error(ERR_INVALID_STATE);
     }
 
+    // GitHub's commit-status API has no "cancelled" state; map it to "error"
+    // so a cancelled job still reaches a terminal, visible status instead of
+    // being rejected outright and leaving the check stuck on "pending".
+    if (request.state === "cancelled") {
+        request.state = "error";
+    }
+
     if (request.repo.startsWith(`${request.owner}/`)) {
         request.repo = request.repo.replace(`${request.owner}/`, '');
     }
@@ -42,7 +49,8 @@ function validateState(state: any): boolean {
     return (state == "success"
         || state == "error"
         || state == "failure"
-        || state == "pending");
+        || state == "pending"
+        || state == "cancelled");
 }
 
 export interface CoreActionsForTesting {

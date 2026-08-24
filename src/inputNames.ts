@@ -7,7 +7,10 @@ export const INPUT_NAMES = {
     context: "context",
     sha: "sha",
     desc: "description",
-    target_url: "target_url"    
+    target_url: "target_url",
+    retries: "retries",
+    retryDelaySeconds: "retryDelaySeconds",
+    timeoutSeconds: "timeoutSeconds"
 }
 
 export default INPUT_NAMES;
