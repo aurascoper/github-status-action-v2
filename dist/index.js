@@ -16,19 +16,39 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isTransient = void 0;
 const defaultSleep = (seconds) => new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+/**
+ * Only transient failures are worth another attempt. Octokit's own retry plugin
+ * draws the same line: retry network/timeout errors and 5xx, never a 4xx that
+ * will fail identically next time (a bad token, a missing commit, a malformed
+ * request). 408 and 429 are the two 4xx that do clear on their own.
+ */
+function isTransient(error) {
+    const status = error === null || error === void 0 ? void 0 : error.status;
+    if (typeof status !== 'number') {
+        return true; // network error, or the per-attempt AbortSignal firing
+    }
+    return status === 408 || status === 429 || status >= 500;
+}
+exports.isTransient = isTransient;
 function createStatusWithRetry(octokit, statusRequest, options, sleep = defaultSleep) {
     return __awaiter(this, void 0, void 0, function* () {
         const { retries, retryDelaySeconds, timeoutSeconds } = options;
+        // `retries` counts retries, not total requests, matching `curl --retry N`.
+        const attempts = retries + 1;
         let lastError;
-        for (let attempt = 1; attempt <= retries; attempt++) {
+        for (let attempt = 1; attempt <= attempts; attempt++) {
             try {
                 yield octokit.rest.repos.createCommitStatus(Object.assign(Object.assign({}, statusRequest), { request: { signal: AbortSignal.timeout(timeoutSeconds * 1000) } }));
                 return;
             }
             catch (error) {
+                if (!isTransient(error)) {
+                    throw error;
+                }
                 lastError = error;
-                if (attempt < retries) {
+                if (attempt < attempts) {
                     yield sleep(retryDelaySeconds);
                 }
             }
@@ -112,9 +132,9 @@ const github = __importStar(__nccwpck_require__(5438));
 const makeStatusRequest_1 = __importDefault(__nccwpck_require__(4676));
 const createStatus_1 = __importDefault(__nccwpck_require__(6381));
 const inputNames_1 = __importDefault(__nccwpck_require__(8676));
-function parsePositiveInt(value, fallback) {
+function parseIntInput(value, fallback, min) {
     const parsed = parseInt(value, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
 }
 function run() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -143,16 +163,18 @@ function run() {
             }
             return;
         }
-        const retries = parsePositiveInt(core.getInput(inputNames_1.default.retries), 3);
-        const retryDelaySeconds = parsePositiveInt(core.getInput(inputNames_1.default.retryDelaySeconds), 5);
-        const timeoutSeconds = parsePositiveInt(core.getInput(inputNames_1.default.timeoutSeconds), 30);
+        // 0 retries and 0 delay are both valid configurations; only the timeout has
+        // to be positive, since a 0ms AbortSignal aborts before the request starts.
+        const retries = parseIntInput(core.getInput(inputNames_1.default.retries), 3, 0);
+        const retryDelaySeconds = parseIntInput(core.getInput(inputNames_1.default.retryDelaySeconds), 5, 0);
+        const timeoutSeconds = parseIntInput(core.getInput(inputNames_1.default.timeoutSeconds), 30, 1);
         try {
             yield (0, createStatus_1.default)(octokit, statusRequest, { retries, retryDelaySeconds, timeoutSeconds });
         }
         catch (error) {
             if (error instanceof Error) {
                 core.setFailed(`Github returned error "${error.message}" when setting status on commit: ${statusRequest.sha}\n` +
-                    ` after ${retries} attempt(s).\n` +
+                    ` after ${retries + 1} attempt(s).\n` +
                     ` Request object:\n` +
                     ` ${JSON.stringify(statusRequest, null, 2)}` +
                     ` Possible issues could be that the token used does not have access to the repository containing the commit or the commit/repository does not exist.`);
